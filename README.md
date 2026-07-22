@@ -1,6 +1,6 @@
 <div align="center">
 <img src="https://giffiles.alphacoders.com/206/206974.gif" width="100%" alt="ASMARG Banner"/>
- <div style="display: flex; justify-content: center; align-items: center; gap: 12px;">
+ <div style="display: flex; justify-content: center; align-items: center;">
     <img src="assets/logo.png" width="70" alt="ASMARG Logo"/>
     <h1 style="margin: 0;">ASMARG</h1>
   </div>
