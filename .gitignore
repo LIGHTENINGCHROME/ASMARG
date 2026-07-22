@@ -1,0 +1,72 @@
+# ASMARG - Smart Offline Attendance Tracker
+# Comprehensive .gitignore for Android/Kotlin/Jetpack Compose
+
+# --- Android / IntelliJ / Android Studio ---
+.idea/
+*.iml
+*.iws
+.project
+.settings/
+.classpath
+.factorypath
+bin/
+gen/
+out/
+captures/
+.externalNativeBuild/
+.cxx/
+.navigation/
+app/src/main/res/drawable/ic_launcher_foreground_asmar.png.tmp*
+
+# --- Gradle ---
+.gradle/
+build/
+app/build/
+gradle-app.setting
+!gradle-wrapper.jar
+.gradletasknamecache
+
+# --- Local Environment / Secrets ---
+local.properties
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# --- Keystore (Crucial for security) ---
+*.jks
+*.keystore
+*.p12
+*.jceks
+*.pck
+*.pkcs12
+
+# --- Google Services / Firebase ---
+# If you eventually add google-services.json for analytics/cloud
+# google-services.json
+
+# --- Room Database Schema ---
+# Standard Room schema exports for migrations (Keep them if you want migration testing, ignore if not)
+# app/schemas/
+
+# --- Logs / Debugging ---
+*.log
+logcat.txt
+
+# --- Backup Artifacts ---
+# Ignore any manual backup JSONs you create during testing
+*.json_backup
+attendance_backup.json
+
+# --- OS Specific ---
+*.swp
+*~
+# Windows
+Executable.exe
+*.msi
+*.msm
+*.msp
+*.lnk
