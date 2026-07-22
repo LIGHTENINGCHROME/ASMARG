@@ -1,6 +1,9 @@
 <div align="center">
 <img src="https://giffiles.alphacoders.com/206/206974.gif" width="100%" alt="ASMARG Banner"/>
-<h1>ASMARG</h1>
+ <div style="display: flex; justify-content: center; align-items: center; gap: 12px;">
+    <img src="assets/logo.png" width="70" alt="ASMARG Logo"/>
+    <h1 style="margin: 0;">ASMARG</h1>
+  </div>
 
 <h3><em>Smart Offline Attendance Tracker</em></h3>
 
