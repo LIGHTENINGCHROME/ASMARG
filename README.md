@@ -18,6 +18,11 @@ Privacy-first • Offline-first • Geofencing • On-device OCR • Jetpack Com
 ![License](https://img.shields.io/badge/License-APACHE2.0-blue)
 
 </div>
+<div align="center">
+
+[![Download Latest APK](https://img.shields.io/badge/Download_APK-2EA44F?style=for-the-badge&logo=android&logoColor=white)](https://github.com/LIGHTENINGCHROME/ASMARG/releases/latest)
+
+</div>
 
 ## 📖 Overview
 
@@ -42,6 +47,36 @@ All processing—including timetable recognition, attendance management, and ana
 
 ---
 
+## 🛡️ Google Play Protect Notice
+
+ASMARG is distributed through **GitHub Releases** and is **not available on the Google Play Store**. Because it is installed from an external source, Android may display a **Google Play Protect** warning. This is normal for sideloaded applications.
+
+### Installation
+
+1. Download the latest APK from **Releases**.
+2. Open the APK.
+3. Allow **Install unknown apps** if prompted.
+4. Tap **Install**.
+
+### If Play Protect Appears
+
+If you downloaded the APK from the **official ASMARG GitHub repository**:
+
+1. Tap **More details** (or **Details**).
+2. Choose **Install anyway** (if available).
+3. Complete the installation.
+
+> **Note:** The exact wording and available options may vary depending on your Android version and device manufacturer.
+
+### Security
+
+- ✅ Download only from the official GitHub repository.
+- ✅ Verify the release version or checksum (if provided).
+- ✅ Keep Google Play Protect enabled.
+
+>ASMARG operates entirely offline and does not upload or collect personal data. A Play Protect warning indicates that the app was installed outside the Play Store—it does **not** necessarily mean the app is unsafe.
+
+---
 ## 🛠 Tech Stack
 
 | Component | Technology |
