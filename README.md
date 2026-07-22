@@ -1,12 +1,20 @@
-# ASMARG – Smart Offline Attendance Tracker
+<div align="center">
+<img src="https://giffiles.alphacoders.com/206/206974.gif" width="100%" alt="ASMARG Banner"/>
+<h1>ASMARG</h1>
 
-> A privacy-first, offline Android attendance tracker powered by geofencing, on-device OCR, and intelligent scheduling.
+<h3><em>Smart Offline Attendance Tracker</em></h3>
+
+<p>
+Privacy-first • Offline-first • Geofencing • On-device OCR • Jetpack Compose
+</p>
 
 ![Platform](https://img.shields.io/badge/Platform-Android-green)
-![Language](https://img.shields.io/badge/Language-Kotlin-purple)
-![UI](https://img.shields.io/badge/UI-Jetpack%20Compose-blue)
-![Architecture](https://img.shields.io/badge/Architecture-MVVM-orange)
-![License](https://img.shields.io/badge/License-MIT-yellow)
+![Kotlin](https://img.shields.io/badge/Kotlin-2.x-7F52FF?logo=kotlin&logoColor=white)
+![Compose](https://img.shields.io/badge/Jetpack-Compose-4285F4?logo=jetpackcompose&logoColor=white)
+![Android](https://img.shields.io/badge/Android-API%2026+-3DDC84?logo=android&logoColor=white)
+![License](https://img.shields.io/badge/License-APACHE2.0-blue)
+
+</div>
 
 ## 📖 Overview
 
@@ -100,7 +108,7 @@ Contributions are welcome!
 
 ## 📄 License
 
-This project is licensed under the **MIT License**.
+This project is licensed under the **Apache-2.0 license**.
 
 ---
 
