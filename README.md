@@ -117,3 +117,7 @@ This project is licensed under the **Apache-2.0 license**.
 If you find this project useful, consider giving it a ⭐ on GitHub.
 
 It helps others discover the project and motivates further development.
+
+---
+## NOTE
+This app is made for my convenience and is not my final year project😉
