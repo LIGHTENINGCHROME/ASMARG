@@ -20,7 +20,7 @@ Privacy-first • Offline-first • Geofencing • On-device OCR • Jetpack Com
 </div>
 <div align="center">
 
-[![Download Latest APK](https://img.shields.io/badge/Download_APK-2EA44F?style=for-the-badge&logo=android&logoColor=white)](https://github.com/LIGHTENINGCHROME/ASMARG/releases/download/Version1.0/ASMARG.apk)
+[![Download Latest APK](https://img.shields.io/badge/Download_APK-2EA44F?style=for-the-badge&logo=android&logoColor=white)](https://github.com/LIGHTENINGCHROME/ASMARG/releases/download/Version2.0.0/ASMARG.apk)
 
 </div>
 
