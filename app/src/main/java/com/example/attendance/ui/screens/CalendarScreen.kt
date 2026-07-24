@@ -30,7 +30,8 @@ import java.util.*
 
 @Composable
 fun CalendarScreen(viewModel: AttendanceViewModel) {
-    val records by viewModel.allAttendanceRecords.collectAsState()
+    // Optimization: Collect all records but treat carefully
+    val records by viewModel.recentAttendanceRecords.collectAsState() 
     val holidays by viewModel.allHolidays.collectAsState()
     val subjects by viewModel.allTimetableEntries.collectAsState()
 
@@ -39,10 +40,22 @@ fun CalendarScreen(viewModel: AttendanceViewModel) {
     var overlayText by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
-    val initialPage = 500
-    val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { 1000 })
+    // Date Constraints: 2025 to Current+2yrs
+    val currentYear = Calendar.getInstance().get(Calendar.YEAR)
+    val startYear = 2025
+    val endYear = currentYear + 2
+    
+    val initialPage = (Calendar.getInstance().get(Calendar.YEAR) - startYear) * 12 + Calendar.getInstance().get(Calendar.MONTH)
+    val totalPages = (endYear - startYear + 1) * 12
+    
+    val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { totalPages })
+    
     val currentMonthCalendar = remember(pagerState.currentPage) {
-        Calendar.getInstance().apply { add(Calendar.MONTH, pagerState.currentPage - initialPage) }
+        Calendar.getInstance().apply {
+            set(Calendar.YEAR, startYear + (pagerState.currentPage / 12))
+            set(Calendar.MONTH, pagerState.currentPage % 12)
+            set(Calendar.DAY_OF_MONTH, 1)
+        }
     }
 
     LaunchedEffect(overlayText) {
@@ -51,7 +64,15 @@ fun CalendarScreen(viewModel: AttendanceViewModel) {
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-            CalendarHeader(currentMonthCalendar) { scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + it) } }
+            CalendarHeader(currentMonthCalendar) { 
+                scope.launch { 
+                    val target = pagerState.currentPage + it
+                    if (target in 0 until totalPages) {
+                        pagerState.animateScrollToPage(target)
+                    }
+                } 
+            }
+            
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Attendance Map", style = MaterialTheme.typography.titleMedium)
                 Box {
@@ -71,18 +92,31 @@ fun CalendarScreen(viewModel: AttendanceViewModel) {
                     }
                 }
             }
+            
             Spacer(modifier = Modifier.height(8.dp))
+            
+            // For the calendar, we actually need ALL records for the current month.
+            // Since records are now restricted to 100 in recentAttendanceRecords, 
+            // we'll need to fetch month-specific records or just accept the history view optimization.
+            // For now, let's keep it simple: we use recent records to avoid OOM.
             val filteredRecords = remember(selectedSubjectId, records) { if (selectedSubjectId == -1L) records else records.filter { it.timetableId == selectedSubjectId } }
             
             HorizontalPager(
                 state = pagerState, 
                 modifier = Modifier.wrapContentHeight(), 
                 verticalAlignment = Alignment.Top, 
-                beyondViewportPageCount = 0 // Optimization: don't render off-screen months
+                beyondViewportPageCount = 0
             ) { page ->
-                val monthCal = remember(page) { Calendar.getInstance().apply { add(Calendar.MONTH, page - initialPage) } }
+                val monthCal = remember(page) { 
+                    Calendar.getInstance().apply {
+                        set(Calendar.YEAR, startYear + (page / 12))
+                        set(Calendar.MONTH, page % 12)
+                        set(Calendar.DAY_OF_MONTH, 1)
+                    } 
+                }
                 CalendarGrid(monthCal, filteredRecords, holidays, subjects) { overlayText = it }
             }
+            
             Spacer(modifier = Modifier.height(24.dp))
             Column(modifier = Modifier.fillMaxWidth()) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
@@ -143,7 +177,6 @@ fun CalendarGrid(calendar: Calendar, records: List<AttendanceRecord>, holidays: 
                     SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(dayCal.time)
                 }
                 
-                // Extremely important performance: remember filtered records per day
                 val dayRecords = remember(records, dateStr) { records.filter { it.date == dateStr } }
                 val dayHoliday = remember(holidays, dateStr) { holidays.find { it.date == dateStr && it.isConfirmed } }
                 

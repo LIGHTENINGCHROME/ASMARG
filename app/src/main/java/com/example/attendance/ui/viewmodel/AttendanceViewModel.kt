@@ -14,6 +14,8 @@ import com.example.attendance.ocr.HolidayParser
 import com.example.attendance.ocr.OcrManager
 import com.example.attendance.ocr.TimetableParser
 import com.example.attendance.scheduler.AttendanceScheduler
+import com.example.attendance.utils.UpdateInfo
+import com.example.attendance.utils.UpdateManager
 import com.example.attendance.worker.AttendanceWorker
 import com.google.android.gms.location.LocationServices
 import kotlinx.coroutines.Dispatchers
@@ -51,16 +53,22 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     private val holidayParser: HolidayParser = HolidayParser()
     private val scheduler: AttendanceScheduler = AttendanceScheduler(application)
     private val backupManager: BackupManager = BackupManager(application)
+    private val updateManager: UpdateManager = UpdateManager(application)
     private val prefs = application.getSharedPreferences("attendance_prefs", Context.MODE_PRIVATE)
 
-    // Using StateFlow with 5s timeout to keep data alive during quick tab switches
     val allTimetableEntries: StateFlow<List<TimetableWithSchedules>>
     val allHolidays: StateFlow<List<Holiday>>
-    val allAttendanceRecords: StateFlow<List<AttendanceRecord>>
+    
+    private val _recentAttendanceRecords = MutableStateFlow<List<AttendanceRecord>>(emptyList())
+    val recentAttendanceRecords: StateFlow<List<AttendanceRecord>> = _recentAttendanceRecords.asStateFlow()
+
     val subjectStats: StateFlow<Map<Long, SubjectStats>>
     
     private val _defaultThreshold = MutableStateFlow(prefs.getInt("default_threshold", 15))
     val defaultThreshold: StateFlow<Int> = _defaultThreshold.asStateFlow()
+
+    private val _autoUpdateEnabled = MutableStateFlow(prefs.getBoolean("auto_update_enabled", true))
+    val autoUpdateEnabled: StateFlow<Boolean> = _autoUpdateEnabled.asStateFlow()
 
     init {
         val attendanceDao = AttendanceDatabase.getDatabase(application).attendanceDao()
@@ -73,19 +81,15 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         allHolidays = repository.allHolidays
             .flowOn(Dispatchers.IO)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-            
-        allAttendanceRecords = repository.allAttendanceRecords
-            .flowOn(Dispatchers.IO)
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-        // Offload stats computation to Default dispatcher to keep Main thread free
-        subjectStats = combine(allTimetableEntries, allAttendanceRecords) { entries, records ->
+        subjectStats = combine(allTimetableEntries, repository.allAttendanceRecords) { entries, records ->
             entries.associate { item ->
                 val sRecords = records.filter { it.timetableId == item.entry.id }
                 val activeRecords = sRecords.filter { it.status != "SUSPENDED" }
                 val present = activeRecords.count { it.status == "PRESENT" }
                 val heldTotal = activeRecords.size
                 val suspended = sRecords.count { it.status == "SUSPENDED" }
+                
                 val effPresent = present + suspended
                 val effTotal = heldTotal + suspended
 
@@ -93,18 +97,39 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     presentCount = present,
                     totalCount = heldTotal,
                     suspendedCount = suspended,
-                    percentage = if (heldTotal > 0) present.toFloat() / heldTotal.toFloat() else 0f,
-                    effectivePercentage = if (effTotal > 0) effPresent.toFloat() / effTotal.toFloat() else 0f
+                    percentage = if (heldTotal > 0) present.scaledPercentage(heldTotal) else 0f,
+                    effectivePercentage = if (effTotal > 0) effPresent.scaledPercentage(effTotal) else 0f
                 )
             }
         }
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+        viewModelScope.launch {
+            repository.allAttendanceRecords.collect { records ->
+                _recentAttendanceRecords.value = records.take(100)
+            }
+        }
+        
+        updateManager.cleanUpOldUpdate()
+    }
+
+    private fun Int.scaledPercentage(total: Int): Float = this.toFloat() / total.toFloat()
+
+    fun getRecordsForSubject(subjectId: Long): Flow<List<AttendanceRecord>> {
+        return repository.allAttendanceRecords.map { records ->
+            records.filter { it.timetableId == subjectId }
+        }.flowOn(Dispatchers.Default)
     }
 
     fun updateDefaultThreshold(newThreshold: Int) {
         prefs.edit().putInt("default_threshold", newThreshold).apply()
         _defaultThreshold.value = newThreshold
+    }
+
+    fun toggleAutoUpdate(enabled: Boolean) {
+        prefs.edit().putBoolean("auto_update_enabled", enabled).apply()
+        _autoUpdateEnabled.value = enabled
     }
 
     fun applyThresholdToSubjects(subjectIds: List<Long>, newThreshold: Int) = viewModelScope.launch(Dispatchers.IO) {
@@ -328,11 +353,11 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         return@withContext conflicts
     }
 
-    fun bulkAddAttendanceConfirmed(subjectId: Long, startDate: String, endDate: String, status: String, updateIds: Set<String>, hasConflicts: Boolean) = viewModelScope.launch(Dispatchers.IO) {
+    fun bulkAddAttendanceConfirmed(subjectId: Long, startDate: String, endDate: String, status: String, updateIds: Set<String>) = viewModelScope.launch(Dispatchers.IO) {
         val database = AttendanceDatabase.getDatabase(getApplication())
         val dao = database.attendanceDao()
         val allSubjects = dao.getAllTimetableEntriesOnce()
-        val subject = allSubjects.find { it.entry.id == subjectId } ?: return@launch
+        val targetSubject = allSubjects.find { it.entry.id == subjectId } ?: return@launch
         val allSchedules = allSubjects.flatMap { it.schedules }
         val allRecords = dao.getAllAttendanceRecordsOnce()
         
@@ -343,6 +368,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         val cal = Calendar.getInstance()
         cal.time = start
         
+        val newRecords = mutableListOf<AttendanceRecord>()
+        
         while (!cal.time.after(end)) {
             val dateStr = sdf.format(cal.time)
             val holiday = dao.getHolidayForDate(dateStr)
@@ -352,11 +379,12 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     Calendar.THURSDAY -> 4; Calendar.FRIDAY -> 5; Calendar.SATURDAY -> 6; Calendar.SUNDAY -> 7; else -> 1
                 }
                 
-                subject.schedules.filter { it.dayOfWeek == currentDay }.forEach { s ->
+                targetSubject.schedules.filter { it.dayOfWeek == currentDay }.forEach { s ->
                     val dateScheduleKey = "${dateStr}_${s.scheduleId}"
                     
                     val tsStart = timeSdf.parse(s.startTime)!!
                     val tsEnd = timeSdf.parse(s.endTime)!!
+                    
                     val isConflict = allRecords.any { r ->
                         if (r.date != dateStr) return@any false
                         val rs = allSchedules.find { it.scheduleId == r.scheduleId } ?: return@any false
@@ -369,17 +397,31 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                         if (updateIds.contains(dateScheduleKey)) {
                             val existing = dao.getAttendanceForScheduleAndDate(subjectId, s.scheduleId, dateStr)
                             if (existing != null) dao.deleteAttendanceRecord(existing)
-                            dao.insertAttendanceRecord(AttendanceRecord(timetableId = subjectId, scheduleId = s.scheduleId, date = dateStr, status = status))
+                            newRecords.add(AttendanceRecord(timetableId = subjectId, scheduleId = s.scheduleId, date = dateStr, status = status))
                         }
                     } else {
                         val existing = dao.getAttendanceForScheduleAndDate(subjectId, s.scheduleId, dateStr)
                         if (existing == null) {
-                            dao.insertAttendanceRecord(AttendanceRecord(timetableId = subjectId, scheduleId = s.scheduleId, date = dateStr, status = status))
+                            newRecords.add(AttendanceRecord(timetableId = subjectId, scheduleId = s.scheduleId, date = dateStr, status = status))
                         }
                     }
                 }
             }
             cal.add(Calendar.DAY_OF_YEAR, 1)
+            
+            if (newRecords.size >= 100) {
+                newRecords.forEach { dao.insertAttendanceRecord(it) }
+                newRecords.clear()
+            }
         }
+        newRecords.forEach { dao.insertAttendanceRecord(it) }
+    }
+
+    suspend fun checkForUpdates(): UpdateInfo? {
+        return updateManager.checkForUpdate()
+    }
+
+    fun performUpdate(url: String, onStartDownload: () -> Unit) {
+        updateManager.downloadAndInstall(url, onStartDownload)
     }
 }

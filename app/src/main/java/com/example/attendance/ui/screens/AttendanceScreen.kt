@@ -27,7 +27,8 @@ import java.util.*
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AttendanceScreen(viewModel: AttendanceViewModel) {
-    val records by viewModel.allAttendanceRecords.collectAsState()
+    // Optimization: Use recentAttendanceRecords (limit 100) instead of all records
+    val records by viewModel.recentAttendanceRecords.collectAsState()
     val timetableEntries by viewModel.allTimetableEntries.collectAsState()
     val stats by viewModel.subjectStats.collectAsState()
     
@@ -91,14 +92,19 @@ fun AttendanceScreen(viewModel: AttendanceViewModel) {
 
             when (selectedTabIndex) {
                 0 -> SubjectWiseAttendance(
-                    records, 
-                    timetableEntries, 
-                    stats, 
-                    viewModel, 
+                    timetableItems = timetableEntries, 
+                    stats = stats, 
+                    viewModel = viewModel, 
                     onDeleteRequest = { recordToDelete = it },
                     onBulkAddRequest = { bulkAddSubjectId = it }
                 )
-                1 -> AttendanceHistory(records, timetableEntries, viewModel, showFullName, onDeleteRequest = { recordToDelete = it })
+                1 -> AttendanceHistory(
+                    records = records, 
+                    timetableItems = timetableEntries, 
+                    viewModel = viewModel, 
+                    showFullName = showFullName, 
+                    onDeleteRequest = { recordToDelete = it }
+                )
             }
         }
     }
@@ -110,7 +116,7 @@ fun AttendanceScreen(viewModel: AttendanceViewModel) {
             conflicts = activeConflicts,
             onDismiss = { activeConflicts = emptyList(); bulkAddParams = null },
             onConfirm = { updateDateSchedules ->
-                viewModel.bulkAddAttendanceConfirmed(bulkAddSubjectId, start, end, status, updateDateSchedules, true)
+                viewModel.bulkAddAttendanceConfirmed(bulkAddSubjectId, start, end, status, updateDateSchedules)
                 activeConflicts = emptyList()
                 bulkAddParams = null
                 bulkAddSubjectId = -1L
@@ -127,7 +133,7 @@ fun AttendanceScreen(viewModel: AttendanceViewModel) {
                 scope.launch {
                     val conflicts = viewModel.checkBulkAddConflicts(bulkAddSubjectId, start, end, status)
                     if (conflicts.isEmpty()) {
-                        viewModel.bulkAddAttendanceConfirmed(bulkAddSubjectId, start, end, status, emptySet(), false)
+                        viewModel.bulkAddAttendanceConfirmed(bulkAddSubjectId, start, end, status, emptySet())
                         bulkAddSubjectId = -1L
                     } else {
                         bulkAddParams = Triple(start, end, status)
@@ -210,7 +216,6 @@ fun ConflictReviewDialog(
 
 @Composable
 fun SubjectWiseAttendance(
-    records: List<AttendanceRecord>, 
     timetableItems: List<TimetableWithSchedules>,
     stats: Map<Long, SubjectStats>,
     viewModel: AttendanceViewModel,
@@ -266,6 +271,9 @@ fun SubjectWiseAttendance(
                     }
 
                     if (expanded) {
+                        // Lazy load subject records only when expanded
+                        val subjectRecords by viewModel.getRecordsForSubject(entry.id).collectAsState(initial = emptyList())
+                        
                         Column {
                             HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
                             
@@ -281,11 +289,10 @@ fun SubjectWiseAttendance(
                             
                             Spacer(modifier = Modifier.height(8.dp))
 
-                            val subjectRecords = remember(records, entry.id) { records.filter { it.timetableId == entry.id }.sortedByDescending { it.date } }
                             if (subjectRecords.isEmpty()) {
                                 Text("No records yet.", style = MaterialTheme.typography.bodySmall)
                             }
-                            subjectRecords.forEach { record ->
+                            subjectRecords.sortedByDescending { it.date }.forEach { record ->
                                 AttendanceRecordRow(record = record, onUpdateStatus = { status -> viewModel.updateAttendanceStatus(record, status) }, onDelete = { onDeleteRequest(record) })
                             }
                         }
@@ -312,6 +319,11 @@ fun BulkAddAttendanceDialog(
     var showStartPicker by remember { mutableStateOf(false) }
     var showEndPicker by remember { mutableStateOf(false) }
 
+    // Date Constraints: 2025 to Current+2yrs
+    val currentYear = Calendar.getInstance().get(Calendar.YEAR)
+    val minDate = remember { Calendar.getInstance().apply { set(2025, 0, 1) }.timeInMillis }
+    val maxDate = remember { Calendar.getInstance().apply { set(currentYear + 2, 11, 31) }.timeInMillis }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Bulk Attendance: $subjectName") },
@@ -334,7 +346,7 @@ fun BulkAddAttendanceDialog(
                     }
                 }
                 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(Modifier.height(16.dp))
                 Text("Mark as:", style = MaterialTheme.typography.labelLarge)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                     FilterChip(selected = status == "PRESENT", onClick = { status = "PRESENT" }, label = { Text("Present") })
@@ -350,7 +362,12 @@ fun BulkAddAttendanceDialog(
     )
 
     if (showStartPicker) {
-        val dateState = rememberDatePickerState()
+        val dateState = rememberDatePickerState(
+            initialSelectedDateMillis = System.currentTimeMillis(),
+            selectableDates = object : SelectableDates {
+                override fun isSelectableDate(utcTimeMillis: Long): Boolean = utcTimeMillis in minDate..maxDate
+            }
+        )
         DatePickerDialog(
             onDismissRequest = { showStartPicker = false },
             confirmButton = {
@@ -362,7 +379,12 @@ fun BulkAddAttendanceDialog(
         ) { DatePicker(state = dateState) }
     }
     if (showEndPicker) {
-        val dateState = rememberDatePickerState()
+        val dateState = rememberDatePickerState(
+            initialSelectedDateMillis = System.currentTimeMillis(),
+            selectableDates = object : SelectableDates {
+                override fun isSelectableDate(utcTimeMillis: Long): Boolean = utcTimeMillis in minDate..maxDate
+            }
+        )
         DatePickerDialog(
             onDismissRequest = { showEndPicker = false },
             confirmButton = {
@@ -411,10 +433,9 @@ fun AttendanceHistory(
     showFullName: Boolean,
     onDeleteRequest: (AttendanceRecord) -> Unit
 ) {
-    val recent = remember(records) { records.sortedByDescending { it.date }.take(50) }
     LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         item { Spacer(modifier = Modifier.height(16.dp)) }
-        items(recent, key = { it.id }) { record ->
+        items(records, key = { it.id }) { record ->
             val item = remember(timetableItems, record.timetableId) { timetableItems.find { it.entry.id == record.timetableId } }
             val name = if (showFullName && !item?.entry?.subjectFullName.isNullOrEmpty()) {
                 item?.entry?.subjectFullName!!
