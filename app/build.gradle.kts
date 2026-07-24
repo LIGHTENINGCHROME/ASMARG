@@ -12,7 +12,7 @@ android {
         applicationId = "com.example.attendance"
         minSdk = 27
         targetSdk = 37
-        versionCode = 2
+        versionCode = 3
         versionName = "2.1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
