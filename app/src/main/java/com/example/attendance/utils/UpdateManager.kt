@@ -16,8 +16,7 @@ import androidx.core.content.FileProvider
 import com.example.attendance.BuildConfig
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -41,8 +40,16 @@ data class UpdateInfo(
 class UpdateManager(private val context: Context) {
 
     private val REPO_API_URL = "https://api.github.com/repos/LIGHTENINGCHROME/ASMARG/releases/latest"
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+    companion object {
+        @Volatile
+        private var isUpdateInProgress = false
+    }
 
     suspend fun checkForUpdate(): UpdateInfo? = withContext(Dispatchers.IO) {
+        if (isUpdateInProgress) return@withContext null
+        
         try {
             val url = URL(REPO_API_URL)
             val connection = url.openConnection() as HttpURLConnection
@@ -93,13 +100,18 @@ class UpdateManager(private val context: Context) {
     }
 
     fun downloadAndInstall(url: String, onStartDownload: () -> Unit) {
-        // 1. Delete old APK
+        if (isUpdateInProgress) {
+            Log.d("UpdateManager", "Update already in progress. Ignoring duplicate request.")
+            return
+        }
+        isUpdateInProgress = true
+
         val updateFile = java.io.File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "ASMARG_update.apk")
         if (updateFile.exists()) updateFile.delete()
 
-        // 2. Check for Installation Permission (Android 8+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             if (!context.packageManager.canRequestPackageInstalls()) {
+                isUpdateInProgress = false
                 Toast.makeText(context, "Please allow ASMARG to install updates", Toast.LENGTH_LONG).show()
                 val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
                     data = Uri.parse("package:${context.packageName}")
@@ -112,7 +124,6 @@ class UpdateManager(private val context: Context) {
 
         onStartDownload()
 
-        // 3. Start Download
         val request = DownloadManager.Request(Uri.parse(url))
             .setTitle("ASMARG Update")
             .setDescription("Downloading latest release...")
@@ -124,16 +135,25 @@ class UpdateManager(private val context: Context) {
         val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val downloadId = downloadManager.enqueue(request)
 
-        Log.d("UpdateManager", "Download started with ID: $downloadId")
-
-        // 4. Listen for completion
         val onComplete = object : BroadcastReceiver() {
             override fun onReceive(receivedContext: Context, intent: Intent) {
                 val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
                 if (id == downloadId) {
-                    Log.d("UpdateManager", "Download completed. Triggering install.")
-                    Toast.makeText(receivedContext, "Download finished. Installing...", Toast.LENGTH_SHORT).show()
-                    installApk(receivedContext)
+                    val query = DownloadManager.Query().setFilterById(downloadId)
+                    val cursor = downloadManager.query(query)
+                    if (cursor.moveToFirst()) {
+                        val statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                        if (statusIdx != -1 && cursor.getInt(statusIdx) == DownloadManager.STATUS_SUCCESSFUL) {
+                            scope.launch {
+                                delay(1500) // Buffer for disk write finalization
+                                installApk(receivedContext)
+                                isUpdateInProgress = false
+                            }
+                        } else {
+                            isUpdateInProgress = false
+                        }
+                    }
+                    cursor.close()
                     receivedContext.unregisterReceiver(this)
                 }
             }
@@ -150,7 +170,7 @@ class UpdateManager(private val context: Context) {
     private fun installApk(currentContext: Context) {
         val updateFile = java.io.File(currentContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "ASMARG_update.apk")
         
-        if (updateFile.exists()) {
+        if (updateFile.exists() && updateFile.length() > 0) {
             try {
                 val uri = FileProvider.getUriForFile(currentContext, "${currentContext.packageName}.fileprovider", updateFile)
                 val installIntent = Intent(Intent.ACTION_VIEW).apply {
@@ -158,14 +178,12 @@ class UpdateManager(private val context: Context) {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
                 }
                 currentContext.startActivity(installIntent)
-                Log.d("UpdateManager", "Installation intent launched successfully")
             } catch (e: Exception) {
                 Log.e("UpdateManager", "Error during installation trigger", e)
-                Toast.makeText(currentContext, "Failed to launch installer: ${e.message}", Toast.LENGTH_LONG).show()
+                Toast.makeText(currentContext, "Failed to launch installer", Toast.LENGTH_LONG).show()
             }
         } else {
-            Log.e("UpdateManager", "Update APK not found at: ${updateFile.absolutePath}")
-            Toast.makeText(currentContext, "Update file missing after download", Toast.LENGTH_SHORT).show()
+            Toast.makeText(currentContext, "Update file incomplete", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -173,7 +191,7 @@ class UpdateManager(private val context: Context) {
         val updateFile = java.io.File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "ASMARG_update.apk")
         if (updateFile.exists()) {
             updateFile.delete()
-            Log.d("UpdateManager", "Cleaned up old update APK")
         }
+        isUpdateInProgress = false
     }
 }
