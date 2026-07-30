@@ -4,18 +4,32 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
-import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
-import androidx.core.app.NotificationCompat
+import android.os.PowerManager
 import android.util.Log
+import androidx.core.app.NotificationCompat
 
 class TrackingService : Service() {
+
+    private var wakeLock: PowerManager.WakeLock? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        Log.d("TrackingService", "Service Created")
+        
+        // Keep CPU alive for background logic
+        val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ASMARG::TrackingWakeLock")
+        wakeLock?.acquire()
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         if (action == "STOP_SERVICE") {
+            Log.d("TrackingService", "Stopping Service")
+            wakeLock?.let { if (it.isHeld) it.release() }
             stopForeground(true)
             stopSelf()
             return START_NOT_STICKY
@@ -25,14 +39,14 @@ class TrackingService : Service() {
         val notification = createNotification()
         startForeground(NOTIFICATION_ID, notification)
         
-        Log.d("TrackingService", "Autonomous tracking service started")
+        Log.d("TrackingService", "Persistent background tracking active")
         return START_STICKY
     }
 
     private fun createNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("ASMARG Tracking Active")
-            .setContentText("Monitoring classes autonomously...")
+            .setContentTitle("ASMARG Automation Active")
+            .setContentText("Monitoring classes in the background...")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
@@ -44,12 +58,18 @@ class TrackingService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val serviceChannel = NotificationChannel(
                 CHANNEL_ID,
-                "Tracking Service Channel",
+                "Automation Service Channel",
                 NotificationManager.IMPORTANCE_LOW
             )
             val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(serviceChannel)
+            manager?.createNotificationChannel(serviceChannel)
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        Log.d("TrackingService", "Service Destroyed")
+        wakeLock?.let { if (it.isHeld) it.release() }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

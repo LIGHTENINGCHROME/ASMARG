@@ -97,8 +97,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     presentCount = present,
                     totalCount = heldTotal,
                     suspendedCount = suspended,
-                    percentage = if (heldTotal > 0) present.scaledPercentage(heldTotal) else 0f,
-                    effectivePercentage = if (effTotal > 0) effPresent.scaledPercentage(effTotal) else 0f
+                    percentage = if (heldTotal > 0) present.toFloat() / heldTotal.toFloat() else 0f,
+                    effectivePercentage = if (effTotal > 0) effPresent.toFloat() / effTotal.toFloat() else 0f
                 )
             }
         }
@@ -113,8 +113,6 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         
         updateManager.cleanUpOldUpdate()
     }
-
-    private fun Int.scaledPercentage(total: Int): Float = this.toFloat() / total.toFloat()
 
     fun getRecordsForSubject(subjectId: Long): Flow<List<AttendanceRecord>> {
         return repository.allAttendanceRecords.map { records ->
@@ -417,8 +415,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         newRecords.forEach { dao.insertAttendanceRecord(it) }
     }
 
-    suspend fun checkForUpdates(): UpdateInfo? {
-        return updateManager.checkForUpdate()
+    suspend fun checkForUpdates(includePreRelease: Boolean = false): UpdateInfo? {
+        return updateManager.checkForUpdate(includePreRelease)
     }
 
     fun performUpdate(url: String, onStartDownload: () -> Unit) {

@@ -17,6 +17,7 @@ import com.example.attendance.data.ClassSchedule
 import com.example.attendance.data.TimetableEntry
 import com.example.attendance.notifications.NotificationHelper
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
 import java.util.*
@@ -32,18 +33,25 @@ class AttendanceWorker(context: Context, params: WorkerParameters) : CoroutineWo
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(channelId, "Attendance Check", NotificationManager.IMPORTANCE_LOW)
             val manager = applicationContext.getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+            manager?.createNotificationChannel(channel)
         }
         return NotificationCompat.Builder(applicationContext, channelId)
-            .setContentTitle("Checking Attendance...")
+            .setContentTitle("Verifying Attendance...")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
     }
 
     override suspend fun doWork(): Result {
-        Log.d("AttendanceWorker", "Worker triggered. Targeted: ${inputData.getLong("timetableId", -1L)}")
+        val isBackground = inputData.getBoolean("isBackgroundTrigger", false)
+        Log.d("AttendanceWorker", "Starting Check. Background: $isBackground")
         
+        // If background, promote to foreground immediately to prevent being killed
+        if (isBackground) {
+            setForeground(getForegroundInfo())
+        }
+
         val database = AttendanceDatabase.getDatabase(applicationContext)
         val dao = database.attendanceDao()
 
@@ -52,7 +60,6 @@ class AttendanceWorker(context: Context, params: WorkerParameters) : CoroutineWo
             Calendar.MONDAY -> 1; Calendar.TUESDAY -> 2; Calendar.WEDNESDAY -> 3;
             Calendar.THURSDAY -> 4; Calendar.FRIDAY -> 5; Calendar.SATURDAY -> 6; Calendar.SUNDAY -> 7; else -> 1
         }
-        val currentTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
         val currentDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
 
         val targetedId = inputData.getLong("timetableId", -1L)
@@ -60,12 +67,9 @@ class AttendanceWorker(context: Context, params: WorkerParameters) : CoroutineWo
         
         val holiday = dao.getHolidayForDate(currentDate)
         if (holiday != null && holiday.isConfirmed) {
-            Log.d("AttendanceWorker", "Holiday today: ${holiday.name}. Skipping.")
+            Log.d("AttendanceWorker", "Holiday: ${holiday.name}. Skipping.")
             return Result.success()
         }
-
-        val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
-        val nowTime = sdf.parse(currentTime) ?: return Result.success()
 
         val allTimetable = dao.getAllTimetableEntriesOnce()
         val matchingSlots = mutableListOf<Pair<TimetableEntry, ClassSchedule>>()
@@ -81,20 +85,17 @@ class AttendanceWorker(context: Context, params: WorkerParameters) : CoroutineWo
                 schedule?.let { matchingSlots.add(t to it) }
             }
         } else {
+            // Manual/Global fallback
+            val currentTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+            val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
+            val nowTime = sdf.parse(currentTime) ?: return Result.success()
+            
             allTimetable.forEach { (t, schedules) ->
                 schedules.filter { it.dayOfWeek == dayOfWeek }.forEach { s ->
                     val startTime = sdf.parse(s.startTime) ?: return@forEach
                     val endTime = sdf.parse(s.endTime) ?: return@forEach
-                    
-                    val isInHours = nowTime.after(startTime) && nowTime.before(endTime) || nowTime == startTime
-                    if (isInHours) {
-                        val thresholdCal = Calendar.getInstance().apply {
-                            time = startTime
-                            add(Calendar.MINUTE, t.attendanceThresholdMinutes)
-                        }
-                        if (nowTime.before(thresholdCal.time) || nowTime == thresholdCal.time) {
-                            matchingSlots.add(t to s)
-                        }
+                    if (nowTime.after(startTime) && nowTime.before(endTime) || nowTime == startTime) {
+                        matchingSlots.add(t to s)
                     }
                 }
             }
@@ -104,15 +105,10 @@ class AttendanceWorker(context: Context, params: WorkerParameters) : CoroutineWo
 
         val fusedLocationClient = LocationServices.getFusedLocationProviderClient(applicationContext)
         try {
-            var location: Location? = fusedLocationClient.lastLocation.await()
+            // Priority: High Accuracy forced for autonomous marking
+            val location = fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null).await()
             if (location == null) {
-                location = fusedLocationClient.getCurrentLocation(
-                    com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY,
-                    null
-                ).await()
-            }
-            if (location == null) {
-                Log.w("AttendanceWorker", "Location null even after refresh.")
+                Log.w("AttendanceWorker", "GPS unavailable. Cannot verify.")
                 return Result.retry() 
             }
             
@@ -123,18 +119,21 @@ class AttendanceWorker(context: Context, params: WorkerParameters) : CoroutineWo
                 if (existing != null) return@forEach
 
                 val results = FloatArray(1)
-                Location.distanceBetween(location!!.latitude, location!!.longitude, t.latitude, t.longitude, results)
+                Location.distanceBetween(location.latitude, location.longitude, t.latitude, t.longitude, results)
                 val distance = results[0]
 
                 if (distance <= t.radiusInMeters) {
                     val id = dao.insertAttendanceRecord(AttendanceRecord(timetableId = t.id, scheduleId = s.scheduleId, date = currentDate, status = "PRESENT"))
                     notificationHelper.sendAttendanceMarkedNotification(t.subjectName, "PRESENT", id)
+                    Log.d("AttendanceWorker", "Marked PRESENT for ${t.subjectName}")
                 } else if (targetedId != -1L) {
                     val id = dao.insertAttendanceRecord(AttendanceRecord(timetableId = t.id, scheduleId = s.scheduleId, date = currentDate, status = "ABSENT"))
                     notificationHelper.sendAttendanceMarkedNotification(t.subjectName, "ABSENT", id)
+                    Log.d("AttendanceWorker", "Marked ABSENT for ${t.subjectName}")
                 }
             }
         } catch (e: SecurityException) {
+            Log.e("AttendanceWorker", "Permission missing", e)
             return Result.failure()
         }
 

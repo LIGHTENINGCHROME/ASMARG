@@ -16,6 +16,7 @@ import androidx.core.content.FileProvider
 import com.example.attendance.BuildConfig
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.*
 import java.net.HttpURLConnection
 import java.net.URL
@@ -23,6 +24,7 @@ import java.net.URL
 data class GitHubRelease(
     @SerializedName("tag_name") val tagName: String,
     @SerializedName("body") val releaseNotes: String,
+    @SerializedName("prerelease") val isPreRelease: Boolean,
     @SerializedName("assets") val assets: List<GitHubAsset>
 )
 
@@ -34,12 +36,13 @@ data class GitHubAsset(
 data class UpdateInfo(
     val versionName: String,
     val updateUrl: String,
-    val releaseNotes: String
+    val releaseNotes: String,
+    val isPreRelease: Boolean = false
 )
 
 class UpdateManager(private val context: Context) {
 
-    private val REPO_API_URL = "https://api.github.com/repos/LIGHTENINGCHROME/ASMARG/releases/latest"
+    private val REPO_API_URL = "https://api.github.com/repos/LIGHTENINGCHROME/ASMARG/releases"
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     companion object {
@@ -47,7 +50,7 @@ class UpdateManager(private val context: Context) {
         private var isUpdateInProgress = false
     }
 
-    suspend fun checkForUpdate(): UpdateInfo? = withContext(Dispatchers.IO) {
+    suspend fun checkForUpdate(includePreRelease: Boolean = false): UpdateInfo? = withContext(Dispatchers.IO) {
         if (isUpdateInProgress) return@withContext null
         
         try {
@@ -58,21 +61,34 @@ class UpdateManager(private val context: Context) {
             
             if (connection.responseCode == 200) {
                 val json = connection.inputStream.bufferedReader().use { it.readText() }
-                val release = Gson().fromJson(json, GitHubRelease::class.java)
+                val itemType = object : TypeToken<List<GitHubRelease>>() {}.type
+                val releases: List<GitHubRelease> = Gson().fromJson(json, itemType)
                 
-                val latestVersionRaw = release.tagName.lowercase().replace("version", "").replace("v", "").trim()
-                val currentVersionRaw = BuildConfig.VERSION_NAME.lowercase().replace("version", "").replace("v", "").trim()
-                
-                if (isNewerVersion(currentVersionRaw, latestVersionRaw)) {
-                    val apkAsset = release.assets.find { it.name.equals("ASMARG.apk", ignoreCase = true) } 
-                        ?: release.assets.find { it.name.endsWith(".apk") }
+                // Filter releases
+                val targetRelease = if (includePreRelease) {
+                    // Get latest pre-release that is newer than current
+                    releases.find { it.isPreRelease }
+                } else {
+                    // Get latest stable release
+                    releases.find { !it.isPreRelease }
+                }
+
+                targetRelease?.let { release ->
+                    val latestVersionRaw = release.tagName.lowercase().replace("version", "").replace("v", "").trim()
+                    val currentVersionRaw = BuildConfig.VERSION_NAME.lowercase().replace("version", "").replace("v", "").trim()
                     
-                    if (apkAsset != null) {
-                        return@withContext UpdateInfo(
-                            versionName = release.tagName,
-                            updateUrl = apkAsset.downloadUrl,
-                            releaseNotes = release.releaseNotes
-                        )
+                    if (isNewerVersion(currentVersionRaw, latestVersionRaw)) {
+                        val apkAsset = release.assets.find { it.name.equals("ASMARG.apk", ignoreCase = true) } 
+                            ?: release.assets.find { it.name.endsWith(".apk") }
+                        
+                        if (apkAsset != null) {
+                            return@withContext UpdateInfo(
+                                versionName = release.tagName,
+                                updateUrl = apkAsset.downloadUrl,
+                                releaseNotes = release.releaseNotes,
+                                isPreRelease = release.isPreRelease
+                            )
+                        }
                     }
                 }
             }
@@ -100,10 +116,7 @@ class UpdateManager(private val context: Context) {
     }
 
     fun downloadAndInstall(url: String, onStartDownload: () -> Unit) {
-        if (isUpdateInProgress) {
-            Log.d("UpdateManager", "Update already in progress. Ignoring duplicate request.")
-            return
-        }
+        if (isUpdateInProgress) return
         isUpdateInProgress = true
 
         val updateFile = java.io.File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "ASMARG_update.apk")
@@ -145,7 +158,7 @@ class UpdateManager(private val context: Context) {
                         val statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
                         if (statusIdx != -1 && cursor.getInt(statusIdx) == DownloadManager.STATUS_SUCCESSFUL) {
                             scope.launch {
-                                delay(1500) // Buffer for disk write finalization
+                                delay(1500)
                                 installApk(receivedContext)
                                 isUpdateInProgress = false
                             }
@@ -182,8 +195,6 @@ class UpdateManager(private val context: Context) {
                 Log.e("UpdateManager", "Error during installation trigger", e)
                 Toast.makeText(currentContext, "Failed to launch installer", Toast.LENGTH_LONG).show()
             }
-        } else {
-            Toast.makeText(currentContext, "Update file incomplete", Toast.LENGTH_SHORT).show()
         }
     }
 
